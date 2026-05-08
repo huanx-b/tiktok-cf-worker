@@ -1,6 +1,6 @@
 name = "tiktokvd"
 main = "cfbuild.js"
-compatibility_date = "2026-05-09"
+compatibility_date = "2026-05-08"
 account_id = "797dab1d6110bd918702c990034a4e9a"
 
 routes = [
