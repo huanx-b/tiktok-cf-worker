@@ -1,5 +1,5 @@
 // TikTok CF Worker - 视频解析接口
-// short link → direct video URL / JSON metadata
+// short link → video download URL / JSON metadata
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -28,7 +28,6 @@ function formatDate(ts) {
 }
 
 async function getVideoData(inputUrl) {
-  // 1. 短链重定向 → 拿到完整视频页URL
   let resolved = inputUrl;
   if (inputUrl.includes("vt.tiktok.com") || inputUrl.includes("vm.tiktok.com")) {
     const r = await fetch(inputUrl, {
@@ -38,10 +37,8 @@ async function getVideoData(inputUrl) {
     resolved = r.url;
   }
 
-  // 2. 抓取视频页面
   const { html } = await fetchHtml(resolved);
 
-  // 3. 提取 __UNIVERSAL_DATA_FOR_REHYDRATION__ JSON
   const rehydrateMatch = html.match(
     /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>\s*(\{.*?\})\s*<\/script>/s
   );
@@ -53,7 +50,6 @@ async function getVideoData(inputUrl) {
 
   const item = detail.itemInfo.itemStruct;
 
-  // 4. 组装结果
   return {
     source_url: inputUrl,
     resolved_url: resolved,
@@ -116,50 +112,18 @@ async function handler(req) {
   try {
     const data = await getVideoData(inputUrl);
 
-    // JSON 模式
     if (returnData) {
       return new Response(JSON.stringify(data, null, 2), {
         headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
       });
     }
 
-    // raw 模式：返回原始直链文本
-    if (url.searchParams.has("raw")) {
-      if (data.type === "video" && data.video?.download_addr) {
-        return new Response(data.video.download_addr, { headers: corsHeaders });
-      }
-      return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
+    // 默认返回下载直链
+    if (data.type === "video" && data.video?.download_addr) {
+      return new Response(data.video.download_addr, { headers: corsHeaders });
     }
 
-    // 默认：CF 代理下载（绕过 GFW）
-    if (data.type === "video") {
-      // downloadAddr 可能有IP校验，优先用 playAddr
-      const dlUrl = data.video?.download_addr || data.video?.play_addr;
-      if (!dlUrl) throw new Error("无法获取视频地址");
-
-      const videoResp = await fetch(dlUrl, {
-        headers: {
-          "User-Agent": UA,
-          Range: req.headers.get("Range") || "",
-        },
-        cf: { cacheEverything: true },
-      });
-      if (!videoResp.ok) throw new Error(`TikTok CDN 返回 ${videoResp.status}`);
-
-      // 流式转发，避免内存爆炸
-      return new Response(videoResp.body, {
-        status: videoResp.status,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": videoResp.headers.get("Content-Type") || "video/mp4",
-          "Content-Length": videoResp.headers.get("Content-Length") || "",
-          "Content-Disposition": `attachment; filename="tiktok_${data.author?.unique_id || "video"}.mp4"`,
-          "Cache-Control": "public, max-age=86400",
-        },
-      });
-    }
-
-    return new Response("无法获取视频", { headers: corsHeaders, status: 500 });
+    return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
   } catch (e) {
     return new Response(
       JSON.stringify({ error: e.message }, null, 2),
