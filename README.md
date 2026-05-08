@@ -4,20 +4,21 @@
 
 ## 功能
 - 输入 TikTok 短链/长链
-- 默认返回视频直链
+- **默认代理下载视频**（CF 中转，绕过 GFW）
 - `?data` 返回 JSON 元数据
-- 提取视频页面中的结构化数据
+- `?raw` 返回原始直链 URL
 
 ## 接口
 
-### 1) 直链模式
 ```bash
-curl "https://tk.YOUR_DOMAIN/?url=https://vt.tiktok.com/xxx/"
-```
+# 1) 代理下载（默认）
+curl -O "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/"
 
-### 2) JSON 模式
-```bash
-curl "https://tk.YOUR_DOMAIN/?url=https://vt.tiktok.com/xxx/&data"
+# 2) JSON 元数据
+curl "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/&data"
+
+# 3) 原始直链
+curl "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/&raw"
 ```
 
 ## 部署
@@ -27,12 +28,10 @@ wrangler deploy
 ```
 
 ## 配置
-见 `wrangler.toml`：
-- Worker 名称：`tiktokvd`
-- 自定义域名：按需配置
+见 `wrangler.toml`。
 
 ## 原理
-从视频页面的 `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON 中提取视频元数据，TikTok 原生提供 `downloadAddr` 直链无需拼接。
+从视频页面的 `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON 提取元数据。默认模式通过 Worker fetch 视频内容并流式返回，利用 CF 网络的国内可达性绕过 GFW。
 
 ## 同类项目
 - [douyin-cf-worker](https://github.com/huanxherta/douyin-cf-worker) - 抖音解析 Worker

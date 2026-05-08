@@ -123,15 +123,39 @@ async function handler(req) {
       });
     }
 
-    // 直链模式
-    if (data.type === "video" && data.video?.download_addr) {
-      return new Response(data.video.download_addr, { headers: corsHeaders });
-    }
-    if (data.type === "image" && data.images?.length > 0) {
-      return new Response(data.images[0], { headers: corsHeaders });
+    // raw 模式：返回原始直链文本
+    if (url.searchParams.has("raw")) {
+      if (data.type === "video" && data.video?.download_addr) {
+        return new Response(data.video.download_addr, { headers: corsHeaders });
+      }
+      return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
     }
 
-    return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
+    // 默认：CF 代理下载（绕过 GFW）
+    if (data.type === "video" && data.video?.download_addr) {
+      const dlUrl = data.video.download_addr;
+      const videoResp = await fetch(dlUrl, {
+        headers: {
+          "User-Agent": UA,
+          Referer: "https://www.tiktok.com/",
+        },
+      });
+      if (!videoResp.ok) throw new Error(`TikTok CDN 返回 ${videoResp.status}`);
+
+      // 流式转发，避免内存爆炸
+      return new Response(videoResp.body, {
+        status: videoResp.status,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": videoResp.headers.get("Content-Type") || "video/mp4",
+          "Content-Length": videoResp.headers.get("Content-Length") || "",
+          "Content-Disposition": `attachment; filename="tiktok_${data.author?.unique_id || "video"}.mp4"`,
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+
+    return new Response("无法获取视频", { headers: corsHeaders, status: 500 });
   } catch (e) {
     return new Response(
       JSON.stringify({ error: e.message }, null, 2),
