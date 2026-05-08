@@ -1,24 +1,33 @@
-// TikTok CF Worker - 视频解析接口
-// short link → video download URL / JSON metadata
+// TikTok CF Worker - 视频解析 + 代理下载
+// 关键：TikTok CDN 签名校验需要匹配 session cookie
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Range",
+  "Access-Control-Expose-Headers": "Content-Length, Content-Type, Content-Disposition",
 };
 
 const UA =
   "Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36";
 
-const FETCH_HEADERS = {
-  "User-Agent": UA,
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-  "Accept-Encoding": "identity",
-};
+function parseCookies(headers) {
+  const cookies = {};
+  const setCookie = headers.get("set-cookie");
+  if (!setCookie) return cookies;
+  // CF Workers 合并多个 Set-Cookie 用逗号分隔
+  // 简单解析：匹配 name=value 对
+  const parts = setCookie.split(",");
+  for (const part of parts) {
+    const match = part.match(/^\s*([^=;]+)=([^;]*)/);
+    if (match) cookies[match[1].trim()] = match[2].trim();
+  }
+  return cookies;
+}
 
-async function fetchHtml(url) {
-  const resp = await fetch(url, { headers: FETCH_HEADERS, redirect: "follow" });
-  return { html: await resp.text(), finalUrl: resp.url };
+function cookieString(cookies) {
+  return Object.entries(cookies)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
 }
 
 function formatDate(ts) {
@@ -28,17 +37,41 @@ function formatDate(ts) {
 }
 
 async function getVideoData(inputUrl) {
+  // 1. 先访问首页，建立 session cookie
+  const homeResp = await fetch("https://www.tiktok.com/", {
+    headers: {
+      "User-Agent": UA,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    },
+    redirect: "follow",
+  });
+  const cookies = parseCookies(homeResp.headers);
+
+  const cookieStr = cookieString(cookies);
+  const fetchHeaders = {
+    "User-Agent": UA,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "identity",
+    Cookie: cookieStr,
+  };
+
+  // 2. 短链重定向
   let resolved = inputUrl;
   if (inputUrl.includes("vt.tiktok.com") || inputUrl.includes("vm.tiktok.com")) {
     const r = await fetch(inputUrl, {
-      headers: { "User-Agent": UA },
+      headers: { "User-Agent": UA, Cookie: cookieStr },
       redirect: "follow",
     });
     resolved = r.url;
   }
 
-  const { html } = await fetchHtml(resolved);
+  // 3. 抓取视频页面
+  const pageResp = await fetch(resolved, { headers: fetchHeaders, redirect: "follow" });
+  const html = await pageResp.text();
 
+  // 4. 提取数据
   const rehydrateMatch = html.match(
     /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>\s*(\{.*?\})\s*<\/script>/s
   );
@@ -79,6 +112,7 @@ async function getVideoData(inputUrl) {
         }
       : null,
     type: item.video ? "video" : "image",
+    _cookies: cookies, // 传递给下载用
   };
 }
 
@@ -97,6 +131,7 @@ async function handler(req) {
           examples: [
             "?url=https://vt.tiktok.com/xxx",
             "?url=https://vt.tiktok.com/xxx&data",
+            "?url=https://vt.tiktok.com/xxx&raw",
           ],
         },
         null,
@@ -108,22 +143,53 @@ async function handler(req) {
 
   const inputUrl = url.searchParams.get("url");
   const returnData = url.searchParams.has("data");
+  const returnRaw = url.searchParams.has("raw");
 
   try {
     const data = await getVideoData(inputUrl);
 
+    // JSON 模式
     if (returnData) {
-      return new Response(JSON.stringify(data, null, 2), {
+      const { _cookies, ...safe } = data;
+      return new Response(JSON.stringify(safe, null, 2), {
         headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
       });
     }
 
-    // 默认返回下载直链
-    if (data.type === "video" && data.video?.download_addr) {
-      return new Response(data.video.download_addr, { headers: corsHeaders });
+    // raw 模式：返回原始直链
+    if (returnRaw) {
+      if (data.type === "video" && data.video?.download_addr) {
+        return new Response(data.video.download_addr, { headers: corsHeaders });
+      }
+      return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
     }
 
-    return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
+    // 默认：CF 代理下载
+    if (data.type === "video" && data.video?.download_addr) {
+      const cookieStr = cookieString(data._cookies);
+      const videoResp = await fetch(data.video.download_addr, {
+        headers: {
+          "User-Agent": UA,
+          Referer: "https://www.tiktok.com/",
+          Cookie: cookieStr,
+          Range: req.headers.get("Range") || "",
+        },
+      });
+      if (!videoResp.ok) throw new Error(`TikTok CDN 返回 ${videoResp.status}`);
+
+      return new Response(videoResp.body, {
+        status: videoResp.status,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": videoResp.headers.get("Content-Type") || "video/mp4",
+          "Content-Length": videoResp.headers.get("Content-Length") || "",
+          "Content-Disposition": `attachment; filename="tiktok_${data.author?.unique_id || "video"}.mp4"`,
+          "Accept-Ranges": "bytes",
+        },
+      });
+    }
+
+    return new Response("无法获取视频", { headers: corsHeaders, status: 500 });
   } catch (e) {
     return new Response(
       JSON.stringify({ error: e.message }, null, 2),
