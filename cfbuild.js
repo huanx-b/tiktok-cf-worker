@@ -132,16 +132,14 @@ async function handler(req) {
     }
 
     // 默认：CF 代理下载（绕过 GFW）
-    if (data.type === "video" && data.video?.download_addr) {
-      const dlUrl = data.video.download_addr;
+    if (data.type === "video") {
+      // downloadAddr 可能有IP校验，优先用 playAddr
+      const dlUrl = data.video?.download_addr || data.video?.play_addr;
+      if (!dlUrl) throw new Error("无法获取视频地址");
+
       const videoResp = await fetch(dlUrl, {
         headers: {
           "User-Agent": UA,
-          Referer: "https://www.tiktok.com/",
-          Origin: "https://www.tiktok.com",
-          Accept: "*/*",
-          "Accept-Language": "zh-CN,zh;q=0.9",
-          "Accept-Encoding": "identity",
           Range: req.headers.get("Range") || "",
         },
         cf: { cacheEverything: true },
