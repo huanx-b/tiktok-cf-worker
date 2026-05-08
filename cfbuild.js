@@ -138,7 +138,13 @@ async function handler(req) {
         headers: {
           "User-Agent": UA,
           Referer: "https://www.tiktok.com/",
+          Origin: "https://www.tiktok.com",
+          Accept: "*/*",
+          "Accept-Language": "zh-CN,zh;q=0.9",
+          "Accept-Encoding": "identity",
+          Range: req.headers.get("Range") || "",
         },
+        cf: { cacheEverything: true },
       });
       if (!videoResp.ok) throw new Error(`TikTok CDN 返回 ${videoResp.status}`);
 
