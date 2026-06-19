@@ -167,13 +167,18 @@ async function handler(req) {
     // 默认：CF 代理下载
     if (data.type === "video" && data.video?.download_addr) {
       const cookieStr = cookieString(data._cookies);
+      const videoHeaders = {
+        "User-Agent": UA,
+        Referer: "https://www.tiktok.com/",
+        Cookie: cookieStr,
+      };
+      // Only pass Range if actually provided
+      const rangeHeader = req.headers.get("Range");
+      if (rangeHeader) videoHeaders["Range"] = rangeHeader;
+
       const videoResp = await fetch(data.video.download_addr, {
-        headers: {
-          "User-Agent": UA,
-          Referer: "https://www.tiktok.com/",
-          Cookie: cookieStr,
-          Range: req.headers.get("Range") || "",
-        },
+        headers: videoHeaders,
+        redirect: "follow",
       });
       if (!videoResp.ok) throw new Error(`TikTok CDN 返回 ${videoResp.status}`);
 
