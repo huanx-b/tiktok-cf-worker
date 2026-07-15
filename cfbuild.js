@@ -78,10 +78,31 @@ async function getVideoData(inputUrl) {
   if (!rehydrateMatch) throw new Error("无法找到视频数据");
 
   const universal = JSON.parse(rehydrateMatch[1]);
-  const detail = universal.__DEFAULT_SCOPE__?.["webapp.reflow.video.detail"];
+  const scope = universal.__DEFAULT_SCOPE__ || {};
+  // 短链 reflow 页用 reflow.video.detail；普通详情页用 video-detail，兜底兼容
+  const detail =
+    scope["webapp.reflow.video.detail"] || scope["webapp.video-detail"];
   if (!detail || detail.statusCode !== 0) throw new Error("视频数据状态异常");
 
   const item = detail.itemInfo.itemStruct;
+
+  // 图片帖子（photo / slideshow）：
+  //  web rehydration 用 camelCase：imagePost.images[].imageURL.urlList[]
+  //  API/aweme 风格用 snake_case：image_post_info.images[].thumbnail.url_list[] / display_image
+  const pickImg = (img) =>
+    img?.imageURL?.urlList?.[0] ||
+    img?.urlList?.[0] ||
+    img?.displayImage?.urlList?.[0] ||
+    img?.display_image?.url_list?.[0] ||
+    img?.thumbnail?.url_list?.[0] ||
+    img?.url_list?.[0] ||
+    null;
+  const images = (
+    (item.imagePost?.images || item.image_post_info?.images || [])
+      .map(pickImg)
+      .filter(Boolean)
+  );
+  const isImage = images.length > 0;
 
   return {
     source_url: inputUrl,
@@ -98,20 +119,24 @@ async function getVideoData(inputUrl) {
       comment_count: item.stats?.commentCount ?? 0,
       share_count: item.stats?.shareCount ?? 0,
     },
-    video: item.video
-      ? {
-          duration: item.video.duration,
-          download_addr: item.video.downloadAddr || null,
-          play_addr: item.video.playAddr || null,
-        }
-      : null,
+    video:
+      !isImage && item.video
+        ? {
+            duration: item.video.duration,
+            download_addr: item.video.downloadAddr || null,
+            play_addr: item.video.playAddr || null,
+          }
+        : null,
+    // 图片帖子：所有图片直链 + 标题
+    images: isImage ? images : null,
+    image_title: isImage ? item.imagePost?.title || null : null,
     music: item.music
       ? {
           title: item.music.title || null,
           play_url: item.music.playUrl || null,
         }
       : null,
-    type: item.video ? "video" : "image",
+    type: isImage ? "image" : item.video ? "video" : "unknown",
     _cookies: cookies, // 传递给下载用
   };
 }
@@ -144,6 +169,8 @@ async function handler(req) {
   const inputUrl = url.searchParams.get("url");
   const returnData = url.searchParams.has("data");
   const returnRaw = url.searchParams.has("raw");
+  // 图片帖子下载指定第几张（1 起）；缺省 1
+  const imgIndex = parseInt(url.searchParams.get("i") || "1", 10);
 
   try {
     const data = await getVideoData(inputUrl);
@@ -160,6 +187,12 @@ async function handler(req) {
     if (returnRaw) {
       if (data.type === "video" && data.video?.download_addr) {
         return new Response(data.video.download_addr, { headers: corsHeaders });
+      }
+      // 图片帖子：每行一个图片直链
+      if (data.type === "image" && data.images?.length) {
+        return new Response(data.images.join("\n"), {
+          headers: { ...corsHeaders, "Content-Type": "text/plain; charset=utf-8" },
+        });
       }
       return new Response("无法获取直链", { headers: corsHeaders, status: 500 });
     }
@@ -190,6 +223,46 @@ async function handler(req) {
           "Content-Length": videoResp.headers.get("Content-Length") || "",
           "Content-Disposition": `attachment; filename="tiktok_${data.author?.unique_id || "video"}.mp4"`,
           "Accept-Ranges": "bytes",
+        },
+      });
+    }
+
+    // 默认：图片帖子 CF 代理下载（?i=N 指定第几张，1 起；缺省第 1 张）
+    if (data.type === "image" && data.images?.length) {
+      const idx = Number.isFinite(imgIndex) && imgIndex >= 1 ? imgIndex : 1;
+      const imgUrl = data.images[idx - 1];
+      if (!imgUrl) {
+        return new Response(
+          `图片序号超出范围（共 ${data.images.length} 张）`,
+          { headers: corsHeaders, status: 400 }
+        );
+      }
+      const cookieStr = cookieString(data._cookies);
+      const imgResp = await fetch(imgUrl, {
+        headers: {
+          "User-Agent": UA,
+          Referer: "https://www.tiktok.com/",
+          Cookie: cookieStr,
+        },
+        redirect: "follow",
+      });
+      if (!imgResp.ok) throw new Error(`TikTok CDN 返回 ${imgResp.status}`);
+
+      const ct = imgResp.headers.get("Content-Type") || "image/jpeg";
+      const ext = ct.includes("png")
+        ? "png"
+        : ct.includes("webp")
+        ? "webp"
+        : ct.includes("avif")
+        ? "avif"
+        : "jpg";
+      return new Response(imgResp.body, {
+        status: imgResp.status,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": ct,
+          "Content-Length": imgResp.headers.get("Content-Length") || "",
+          "Content-Disposition": `attachment; filename="tiktok_${data.author?.unique_id || "image"}_${idx}.${ext}"`,
         },
       });
     }
