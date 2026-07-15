@@ -5,24 +5,27 @@
 ## 功能
 - 输入 TikTok 短链/长链
 - 自动识别**视频**与**图集（photo / slideshow）**
-- **默认：CF 代理下载**（视频或图片，绕过 GFW）
+- **视频默认：CF 代理下载**（绕过 GFW）
+- **图集默认：返回全部图片直链**（每行一个）；`?i=N` 下载第 N 张
 - `?data` 返回 JSON 元数据
 - `?raw` 返回原始直链 URL（图集为每行一个图片直链）
-- `?i=N` 图集下载第 N 张（1 起，缺省第 1 张）
 
 ## 接口
 
 ```bash
-# 1) 代理下载（默认）- 浏览器直接打开即可下载
+# 1) 视频：代理下载（默认）- 浏览器直接打开即可下载
 curl -O "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/"
 
-# 2) JSON 元数据（视频含 video 字段，图集含 images 数组）
+# 2) 图集：默认返回全部图片直链（每行一个）
+curl "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/"
+
+# 3) JSON 元数据（视频含 video 字段，图集含 images 数组）
 curl "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/&data"
 
-# 3) 原始直链（图集为每行一个图片 URL）
+# 4) 原始直链（图集为每行一个图片 URL）
 curl "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/&raw"
 
-# 4) 图集：下载第 2 张图片
+# 5) 图集：下载第 2 张图片
 curl -O "https://tk.0d000721.cv/?url=https://vt.tiktok.com/xxx/&i=2"
 ```
 

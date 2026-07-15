@@ -169,8 +169,10 @@ async function handler(req) {
   const inputUrl = url.searchParams.get("url");
   const returnData = url.searchParams.has("data");
   const returnRaw = url.searchParams.has("raw");
-  // 图片帖子下载指定第几张（1 起）；缺省 1
-  const imgIndex = parseInt(url.searchParams.get("i") || "1", 10);
+  // 图片帖子下载指定第几张（1 起）；缺省返回全部直链
+  const imgIndexParam = url.searchParams.get("i");
+  const hasIndex = imgIndexParam !== null;
+  const imgIndex = parseInt(imgIndexParam, 10);
 
   try {
     const data = await getVideoData(inputUrl);
@@ -227,15 +229,16 @@ async function handler(req) {
       });
     }
 
-    // 默认：图片帖子 CF 代理下载（?i=N 指定第几张，1 起；缺省第 1 张）
+    // 图片帖子：默认返回全部图片直链（每行一个）；?i=N 下载第 N 张（1 起；越界回退全部直链）
     if (data.type === "image" && data.images?.length) {
-      const idx = Number.isFinite(imgIndex) && imgIndex >= 1 ? imgIndex : 1;
-      const imgUrl = data.images[idx - 1];
+      const idx =
+        hasIndex && Number.isFinite(imgIndex) && imgIndex >= 1 ? imgIndex : null;
+      const imgUrl = idx ? data.images[idx - 1] : null;
+      // 未指定 i，或序号越界：返回全部直链
       if (!imgUrl) {
-        return new Response(
-          `图片序号超出范围（共 ${data.images.length} 张）`,
-          { headers: corsHeaders, status: 400 }
-        );
+        return new Response(data.images.join("\n"), {
+          headers: { ...corsHeaders, "Content-Type": "text/plain; charset=utf-8" },
+        });
       }
       const cookieStr = cookieString(data._cookies);
       const imgResp = await fetch(imgUrl, {
